@@ -1,0 +1,16 @@
+flowchart LR
+  SDK["JS SDK (unchanged)"] --> ALB["ALB, same hostname"]
+  ALB --> COL["Collector, Fargate<br/>write key to tenant<br/>stamp received_at<br/>ack only after durable put"]
+  COL -->|"PutRecords, key tenant:anon"| KDS[("Kinesis Data Streams<br/>23 shards always on")]
+  COL -.->|"Kinesis put fails after retries"| SPOOL[("S3 fallback spool<br/>replayed by job")]
+  COL -.->|"migration tee"| LEG["Legacy pipeline<br/>(kept fed until decommission)"]
+  KDS --> CON["Consumer, Fargate KCL<br/>parse, normalise adapters,<br/>dedupe, PII redact, bot flag,<br/>clock policy, route"]
+  KDS --> FH["Firehose"] --> RAW[("S3 raw Parquet<br/>tenant/date partitions<br/>replay + exports")]
+  CON --> REDIS[("Redis<br/>dedupe keys, live counters,<br/>rolling user features")]
+  CON --> CH[("ClickHouse Cloud on AWS<br/>ReplacingMergeTree<br/>tenant row policies")]
+  CON --> DLQ[("S3 dead letter<br/>malformed, quarantined")]
+  CON --> DEL["SQS deletion queue<br/>suppress now, delete after<br/>tenant verification"]
+  PG[("Postgres<br/>identity map, tenants,<br/>deletion audit")] --- CON
+  REDIS --> API["Dashboard + personalisation API"]
+  CH --> API
+  RAW --> EXP["Exports: Snowflake stage,<br/>BigQuery transfer,<br/>deletion manifests"]
